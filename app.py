@@ -14,7 +14,10 @@ import pandas as pd
 import streamlit as st
 
 from auth_utils import authenticate, register_user
-from config import LEAVE_TYPES, ROLE_HR, ROLE_USER, STATUS_APPROVED, STATUS_PENDING, STATUS_REJECTED
+from config import (
+    LEAVE_TYPES, ROLE_HR, ROLE_USER, STATUS_APPROVED, STATUS_PENDING_AO,
+    STATUS_PENDING_HR, STATUS_REJECTED,
+)
 from email_utils import send_email
 from gsheet_utils import append_request, get_requests_df, get_users_df, update_request_status
 
@@ -104,7 +107,7 @@ def render_leave_request_section():
     users_df = get_users_df()
     staff_df = users_df[users_df["Role"] == ROLE_USER].reset_index(drop=True)
 
-    tab_new, tab_notify = st.tabs(["📝 New Request", "🔔 Notifications"])
+    tab_new, tab_ao, tab_notify = st.tabs(["📝 New Request", "🧾 Acting Officer Approvals", "🔔 Notifications"])
 
     # ---- New Request tab -------------------------------------------------
     with tab_new:
@@ -159,20 +162,84 @@ def render_leave_request_section():
 
                 send_email(
                     acting_row["Email"],
-                    f"You have been assigned as Acting Officer ({selected_name})",
+                    f"Leave request awaiting your approval ({selected_name})",
                     f"Dear {acting_row['Name']},\n\n"
                     f"{selected_name} ({designation}) has applied for {leave_type} "
                     f"from {leave_date} to {return_date}, and has named you as Acting Officer "
                     f"during this period.\n\nReason: {reason.strip()}\n\n"
-                    f"Please check the Notifications section of the app for details.\n\n"
-                    f"Request ID: {request_id}",
+                    f"Please log in and approve or reject this request under "
+                    f"Acting Officer Approvals.\n\nRequest ID: {request_id}",
                 )
-                st.success("Your leave request has been submitted.")
+                st.success("✅ Request Sent to Acting Officer")
                 st.rerun()
+
+    # ---- Acting Officer Approvals tab -------------------------------------
+    with tab_ao:
+        render_acting_officer_approvals()
 
     # ---- Notifications tab -------------------------------------------------
     with tab_notify:
         render_user_notifications()
+
+
+def render_acting_officer_approvals():
+    requests_df = get_requests_df()
+    username = st.session_state.username
+    pending = requests_df[
+        (requests_df["ActingOfficerUsername"] == username) & (requests_df["Status"] == STATUS_PENDING_AO)
+    ].sort_values("RequestedOn", ascending=True) if not requests_df.empty else requests_df
+
+    if pending.empty:
+        st.info("No requests waiting for your approval.")
+        return
+
+    for _, r in pending.iterrows():
+        with st.container(border=True):
+            st.markdown(
+                f"**{r['Name']}** · {r['Designation']}  \n"
+                f"{r['LeaveType']}: {r['LeaveDate']} → {r['ReturnDate']}  \n"
+                f"Reason: {r['Reason']}"
+            )
+            remarks = st.text_input("Remarks (optional)", key=f"ao_remarks_{r['RequestID']}")
+            c1, c2 = st.columns(2)
+            if c1.button("✅ Approve", key=f"ao_appr_{r['RequestID']}"):
+                _ao_decide(r, approve=True, remarks=remarks)
+            if c2.button("❌ Reject", key=f"ao_rej_{r['RequestID']}"):
+                _ao_decide(r, approve=False, remarks=remarks)
+
+
+def _ao_decide(request_row: pd.Series, approve: bool, remarks: str):
+    if approve:
+        new_status = STATUS_PENDING_HR
+        update_request_status(request_row["RequestID"], new_status, remarks, stage="ao")
+        users_df = get_users_df()
+        for _, hr_user in users_df[users_df["Role"] == ROLE_HR].iterrows():
+            send_email(
+                hr_user["Email"],
+                f"Leave request awaiting HR approval ({request_row['Name']})",
+                f"Dear {hr_user['Name']},\n\n"
+                f"{request_row['Name']} ({request_row['Designation']})'s {request_row['LeaveType']} request "
+                f"({request_row['LeaveDate']} to {request_row['ReturnDate']}) has been approved by the "
+                f"Acting Officer and now needs HR approval.\n\n"
+                f"Request ID: {request_row['RequestID']}",
+            )
+        st.success("Approved and sent to HR.")
+    else:
+        new_status = STATUS_REJECTED
+        update_request_status(request_row["RequestID"], new_status, remarks, stage="ao")
+        users_df = get_users_df()
+        requester = users_df[users_df["Username"] == request_row["Username"]]
+        if not requester.empty:
+            send_email(
+                requester.iloc[0]["Email"],
+                "Your leave request has been Rejected",
+                f"Dear {request_row['Name']},\n\nYour {request_row['LeaveType']} request "
+                f"({request_row['LeaveDate']} to {request_row['ReturnDate']}) was rejected by your "
+                f"Acting Officer.\n" + (f"\nRemarks: {remarks}\n" if remarks else "")
+                + "\nPlease check the Notifications section of the app for details.",
+            )
+        st.success("Request rejected.")
+    st.rerun()
 
 
 def render_user_notifications():
@@ -187,10 +254,12 @@ def render_user_notifications():
         "RequestedOn", ascending=False
     )
     own_updates = requests_df[
-        (requests_df["Username"] == username) & (requests_df["Status"] != STATUS_PENDING)
+        (requests_df["Username"] == username)
+        & (requests_df["Status"].isin([STATUS_APPROVED, STATUS_REJECTED]))
     ].sort_values("RequestedOn", ascending=False)
     own_pending = requests_df[
-        (requests_df["Username"] == username) & (requests_df["Status"] == STATUS_PENDING)
+        (requests_df["Username"] == username)
+        & (requests_df["Status"].isin([STATUS_PENDING_AO, STATUS_PENDING_HR]))
     ].sort_values("RequestedOn", ascending=False)
 
     if own_updates.empty and acting_for.empty and own_pending.empty:
@@ -199,15 +268,17 @@ def render_user_notifications():
 
     for _, r in own_updates.iterrows():
         icon = "✅" if r["Status"] == STATUS_APPROVED else "❌"
+        remarks = r["HRRemarks"] or r["AORemarks"]
         st.container(border=True).markdown(
             f"{icon} **Your {r['LeaveType']} request was {r['Status']}**  \n"
             f"{r['LeaveDate']} → {r['ReturnDate']}"
-            + (f"  \n_HR remarks: {r['HRRemarks']}_" if r["HRRemarks"] else "")
+            + (f"  \n_Remarks: {remarks}_" if remarks else "")
         )
 
     for _, r in own_pending.iterrows():
+        waiting_on = "Acting Officer" if r["Status"] == STATUS_PENDING_AO else "HR"
         st.container(border=True).markdown(
-            f"⏳ **{r['LeaveType']} request pending approval**  \n"
+            f"⏳ **{r['LeaveType']} request pending {waiting_on} approval**  \n"
             f"{r['LeaveDate']} → {r['ReturnDate']}  \nActing Officer: {r['ActingOfficerName']}"
         )
 
@@ -224,7 +295,7 @@ def render_hr_section():
 
     with tab_pending:
         requests_df = get_requests_df()
-        pending = requests_df[requests_df["Status"] == STATUS_PENDING].sort_values(
+        pending = requests_df[requests_df["Status"] == STATUS_PENDING_HR].sort_values(
             "RequestedOn", ascending=True
         )
         if pending.empty:
@@ -234,7 +305,7 @@ def render_hr_section():
                 st.markdown(
                     f"**{r['Name']}** · {r['Designation']}  \n"
                     f"{r['LeaveType']}: {r['LeaveDate']} → {r['ReturnDate']}  \n"
-                    f"Acting Officer: {r['ActingOfficerName']}  \n"
+                    f"Acting Officer: {r['ActingOfficerName']} (approved)  \n"
                     f"Reason: {r['Reason']}"
                 )
                 remarks = st.text_input("Remarks (optional)", key=f"remarks_{r['RequestID']}")
@@ -249,7 +320,10 @@ def render_hr_section():
         if requests_df.empty:
             st.info("No requests yet.")
             return
-        status_filter = st.selectbox("Filter by status", ["All", STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED])
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All", STATUS_PENDING_AO, STATUS_PENDING_HR, STATUS_APPROVED, STATUS_REJECTED],
+        )
         view = requests_df if status_filter == "All" else requests_df[requests_df["Status"] == status_filter]
         st.dataframe(
             view[["Name", "LeaveType", "LeaveDate", "ReturnDate", "ActingOfficerName", "Status", "RequestedOn"]],
@@ -259,7 +333,7 @@ def render_hr_section():
 
 
 def _decide(request_row: pd.Series, status: str, remarks: str):
-    update_request_status(request_row["RequestID"], status, remarks)
+    update_request_status(request_row["RequestID"], status, remarks, stage="hr")
     users_df = get_users_df()
     requester = users_df[users_df["Username"] == request_row["Username"]]
     if not requester.empty:
@@ -267,7 +341,7 @@ def _decide(request_row: pd.Series, status: str, remarks: str):
             requester.iloc[0]["Email"],
             f"Your leave request has been {status}",
             f"Dear {request_row['Name']},\n\nYour {request_row['LeaveType']} request "
-            f"({request_row['LeaveDate']} to {request_row['ReturnDate']}) has been {status}.\n"
+            f"({request_row['LeaveDate']} to {request_row['ReturnDate']}) has been {status} by HR.\n"
             + (f"\nHR remarks: {remarks}\n" if remarks else "")
             + "\nPlease check the Notifications section of the app for details.",
         )
