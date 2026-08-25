@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-from config import USERS_TAB, REQUESTS_TAB, USER_COLUMNS, REQUEST_COLUMNS, SHEET_NAME
+from config import USERS_TAB, REQUESTS_TAB, USER_COLUMNS, REQUEST_COLUMNS, SHEET_NAME, STATUS_PENDING_AO
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -79,22 +79,31 @@ def append_request(row: dict) -> str:
     row = dict(row)
     row["RequestID"] = str(uuid.uuid4())[:8].upper()
     row["RequestedOn"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    row.setdefault("Status", "Pending")
+    row.setdefault("Status", STATUS_PENDING_AO)
+    row.setdefault("AORemarks", "")
     row.setdefault("HRRemarks", "")
+    row.setdefault("AODecidedOn", "")
     row.setdefault("DecidedOn", "")
     ordered = [str(row.get(c, "")) for c in REQUEST_COLUMNS]
     ws.append_row(ordered)
     return row["RequestID"]
 
 
-def update_request_status(request_id: str, status: str, remarks: str = "") -> bool:
+def update_request_status(request_id: str, status: str, remarks: str = "", stage: str = "hr") -> bool:
+    """
+    Updates a request's status.
+    stage="ao"  -> writes to AORemarks / AODecidedOn (Acting Officer decision)
+    stage="hr"  -> writes to HRRemarks / DecidedOn (HR-KMN decision)
+    """
     ws = _get_worksheet(REQUESTS_TAB, REQUEST_COLUMNS)
     cell = ws.find(request_id)
     if not cell:
         return False
     header = ws.row_values(1)
     row_idx = cell.row
+    remarks_col = "AORemarks" if stage == "ao" else "HRRemarks"
+    decided_col = "AODecidedOn" if stage == "ao" else "DecidedOn"
     ws.update_cell(row_idx, header.index("Status") + 1, status)
-    ws.update_cell(row_idx, header.index("HRRemarks") + 1, remarks)
-    ws.update_cell(row_idx, header.index("DecidedOn") + 1, datetime.now().strftime("%Y-%m-%d %H:%M"))
+    ws.update_cell(row_idx, header.index(remarks_col) + 1, remarks)
+    ws.update_cell(row_idx, header.index(decided_col) + 1, datetime.now().strftime("%Y-%m-%d %H:%M"))
     return True
