@@ -27,6 +27,9 @@ def _get_client():
 
 
 def _get_sheet():
+    sheet_id = st.secrets.get("sheet_id", "")
+    if sheet_id:
+        return _get_client().open_by_key(sheet_id)
     return _get_client().open(SHEET_NAME)
 
 
@@ -62,6 +65,12 @@ def get_requests_df() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = ""
     return df
+
+
+def append_user(row: dict):
+    ws = _get_worksheet(USERS_TAB, USER_COLUMNS)
+    ordered = [str(row.get(c, "")) for c in USER_COLUMNS]
+    ws.append_row(ordered)
 
 
 def append_request(row: dict) -> str:
