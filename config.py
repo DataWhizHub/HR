@@ -16,12 +16,13 @@ REQUEST_COLUMNS = [
     "RequestID", "Username", "EmpNo", "Name", "Designation",
     "ActingOfficerUsername", "ActingOfficerName", "ActingOfficerEmail",
     "LeaveType", "LeaveDate", "ReturnDate", "Reason",
-    "Status", "HRRemarks", "RequestedOn", "DecidedOn",
+    "Status", "AORemarks", "HRRemarks", "RequestedOn", "AODecidedOn", "DecidedOn",
 ]
 
 LEAVE_TYPES = ["Annual Leave", "Casual Leave", "Medical Leave", "Short Leave", "Other"]
 
-STATUS_PENDING = "Pending"
+STATUS_PENDING_AO = "Pending Acting Officer"
+STATUS_PENDING_HR = "Pending HR Approval"
 STATUS_APPROVED = "Approved"
 STATUS_REJECTED = "Rejected"
 
