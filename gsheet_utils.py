@@ -40,6 +40,19 @@ def _get_worksheet(tab_name: str, columns: list):
     except gspread.WorksheetNotFound:
         ws = sheet.add_worksheet(title=tab_name, rows=1000, cols=len(columns) + 2)
         ws.append_row(columns)
+        return ws
+
+    # The tab already existed - make sure its header has every column this
+    # version of the app expects (e.g. AORemarks/AODecidedOn added later).
+    # Any missing ones are appended to the end of the header, existing data
+    # in existing columns is left untouched.
+    header = ws.row_values(1)
+    missing = [c for c in columns if c not in header]
+    if missing:
+        new_header = header + missing
+        if ws.col_count < len(new_header):
+            ws.add_cols(len(new_header) - ws.col_count)
+        ws.update(range_name="A1", values=[new_header])
     return ws
 
 
@@ -69,7 +82,8 @@ def get_requests_df() -> pd.DataFrame:
 
 def append_user(row: dict):
     ws = _get_worksheet(USERS_TAB, USER_COLUMNS)
-    ordered = [str(row.get(c, "")) for c in USER_COLUMNS]
+    header = ws.row_values(1) or USER_COLUMNS
+    ordered = [str(row.get(c, "")) for c in header]
     ws.append_row(ordered)
 
 
@@ -84,7 +98,8 @@ def append_request(row: dict) -> str:
     row.setdefault("HRRemarks", "")
     row.setdefault("AODecidedOn", "")
     row.setdefault("DecidedOn", "")
-    ordered = [str(row.get(c, "")) for c in REQUEST_COLUMNS]
+    header = ws.row_values(1) or REQUEST_COLUMNS
+    ordered = [str(row.get(c, "")) for c in header]
     ws.append_row(ordered)
     return row["RequestID"]
 
