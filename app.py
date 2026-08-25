@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from auth_utils import authenticate
+from auth_utils import authenticate, register_user
 from config import LEAVE_TYPES, ROLE_HR, ROLE_USER, STATUS_APPROVED, STATUS_PENDING, STATUS_REJECTED
 from email_utils import send_email
 from gsheet_utils import append_request, get_requests_df, get_users_df, update_request_status
@@ -47,29 +47,56 @@ def logout():
 # ============================================================== LOGIN =====
 def render_login():
     st.title("🗓️ HR Leave Request")
-    st.caption("Please log in to continue")
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Log In")
-    if submitted:
-        if not username or not password:
-            st.error("Please enter both username and password.")
-            return
-        user = authenticate(username, password)
-        if user is None:
-            st.error("Invalid username or password.")
-            return
-        st.session_state.update(
-            logged_in=True,
-            username=user["Username"],
-            role=user["Role"],
-            name=user["Name"],
-            empno=user["EmpNo"],
-            designation=user["Designation"],
-            email=user["Email"],
-        )
-        st.rerun()
+
+    tab_login, tab_signup = st.tabs(["Log In", "Create Account"])
+
+    with tab_login:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Log In")
+        if submitted:
+            if not username or not password:
+                st.error("Please enter both username and password.")
+                return
+            user = authenticate(username, password)
+            if user is None:
+                st.error("Invalid username or password.")
+                return
+            st.session_state.update(
+                logged_in=True,
+                username=user["Username"],
+                role=user["Role"],
+                name=user["Name"],
+                empno=user["EmpNo"],
+                designation=user["Designation"],
+                email=user["Email"],
+            )
+            st.rerun()
+
+    with tab_signup:
+        st.caption("Create your account, then use it to log in on the other tab.")
+        with st.form("signup_form", clear_on_submit=True):
+            su_username = st.text_input("Choose a Username")
+            su_password = st.text_input("Choose a Password", type="password")
+            su_password2 = st.text_input("Confirm Password", type="password")
+            su_empno = st.text_input("Emp No")
+            su_name = st.text_input("Full Name")
+            su_designation = st.text_input("Designation")
+            su_email = st.text_input("Email")
+            su_submitted = st.form_submit_button("Create Account")
+
+        if su_submitted:
+            if su_password != su_password2:
+                st.error("Passwords do not match.")
+            else:
+                ok, message = register_user(
+                    su_username, su_password, su_empno, su_name, su_designation, su_email
+                )
+                if ok:
+                    st.success("Account created. Please switch to the Log In tab to sign in.")
+                else:
+                    st.error(message)
 
 
 # ======================================================= LEAVE REQUEST ====
